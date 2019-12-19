@@ -1,0 +1,99 @@
+import java.util.Base64;
+import java.nio.charset.StandardCharsets;
+import ammonite.ops._
+import ammonite.ops.ImplicitWd._
+import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.TimeZone
+
+val enrollRequest = requests.post(
+  "https://vertica-xmas2019.azurewebsites.net/api/participate",
+  data = """{
+    "fullName": "Henrik Kirk",
+    "emailAddress": "henrik@ase.au.dk",
+    "subscribeToNewsletter": false
+  }
+  """,
+  headers = Map(
+      "Content-Type" -> "application/json"
+  )
+)
+
+// Låge 2
+
+val parsed = ujson.read(enrollRequest.text)
+val elasticSearchUrl = "https://eebc6f27713d4519970d75c86050e363.eu-central-1.aws.cloud.es.io:443/santa-trackings/_doc/"
+
+val base64Auth = Base64.getEncoder().encodeToString("Participant:fr5ZS6NT2gQE1VL0hLZmB1X8HhGAW4".getBytes(StandardCharsets.UTF_8))
+
+val auth = "Basic " + base64Auth
+
+val santaResponse = requests.get(elasticSearchUrl + parsed.obj("id").value, 
+  headers = Map(
+    "Authorization" -> auth,
+    "Content-Type" -> "application/json"
+  )
+)
+
+val wd = pwd
+write.over(wd/"santatracking.json", santaResponse.text)
+
+val santaPosCalculationResult = %%('dotnet, "run", "tracking")
+val parsedSantaResult = ujson.read(santaPosCalculationResult.out.string)
+
+val santarescueRequest = requests.post(
+  "https://vertica-xmas2019.azurewebsites.net//api/santarescue",
+  data = s"""{
+    "id": "${parsed.obj("id").value}",
+    "position": {
+      "lat": ${parsedSantaResult.obj("latitude")},
+      "lon": ${parsedSantaResult.obj("longitude")}
+    }
+  } """,
+  headers = Map(
+      "Content-Type" -> "application/json"
+  )
+) 
+
+val reindeer = santarescueRequest.text
+
+write.over(wd/"reindeer.json", reindeer)
+
+// Låge 3
+
+val excatReindeerLocations = %%('dotnet, "run", "reindeer")
+
+val reindeerLocationResponse = requests.post(
+  "https://vertica-xmas2019.azurewebsites.net/api/reindeerrescue",
+  data = s"""{
+    "id": "${parsed.obj("id").value}",
+    "locations": ${excatReindeerLocations.out.string}
+  } """,
+  headers = Map(
+      "Content-Type" -> "application/json"
+  )
+)
+
+
+val reindeerResponseJson = ujson.read(reindeerLocationResponse.text)
+
+val toyDistributionResponse = requests.get(reindeerResponseJson.obj("toyDistributionXmlUrl").str)
+
+write.over(wd/"toyDistribution.xml", toyDistributionResponse.text)
+
+// Låge 4
+val toys2ChildrenOutput = %%('dotnet, "run", "toys2children")
+
+val toysDistributionResponse = requests.post(
+  "https://vertica-xmas2019.azurewebsites.net/api/toydistribution",
+  data = s"""{
+    "id": "${parsed.obj("id").value}",
+    "toyDistribution": ${toys2ChildrenOutput.out.string}
+  } """,
+  headers = Map(
+      "Content-Type" -> "application/json"
+  )
+)
+
+println(toysDistributionResponse.text)
